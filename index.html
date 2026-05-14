@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>ITZY-MOTTO-RUN</title>
+      <link rel="icon" type="image/png" sizes="32x32" href="icon.png">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap');
+        body { margin: 0; background: #d5efea; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; touch-action: none; font-family: 'Quicksand', sans-serif; }
+        #game-container { position: relative; height: 95vh; height: 95dvh; aspect-ratio: 9 / 16; background: #fff; overflow: hidden; border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.1); transition: background 1.5s ease; }
+        canvas { width: 100%; height: 100%; display: block; cursor: pointer; }
+        #youtube-player { position: absolute; visibility: hidden; pointer-events: none; }
+        .ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; z-index: 100; pointer-events: none; }
+        .header-box { background: rgba(255, 255, 255, 0.85); width: 100%; padding: 40px 0; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.05); }
+        h2 { margin: 0; font-size: 50px; color: #3c5241; font-weight: 700; letter-spacing: -1px; }
+        #game-over-card { background: rgba(255, 255, 255, 0.95); padding: 40px; border-radius: 30px; text-align: center; width: 70%; margin-top: auto; margin-bottom: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.1); pointer-events: auto; }
+        .btn { padding: 20px 60px; font-size: 32px; cursor: pointer; background: #a67c7c; color: white; border: none; border-radius: 50px; font-weight: bold; box-shadow: 0 8px 0px #7a4a4a; }
+        #phase-alert { position: absolute; top: 20%; width: 100%; text-align: center; font-size: 80px; font-weight: 800; color: #5a7a5a; pointer-events: none; opacity: 0; transform: scale(0.5); z-index: 50; transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        #phase-alert.show { opacity: 1; transform: scale(1); }
+    </style>
+</head>
+<body>
+    <div id="youtube-player"></div>
+    <div id="game-container">
+        <div id="phase-alert">PHASE 2</div>
+        <div id="selection-screen" class="ui-overlay">
+            <div class="header-box"><h2>CHOOSE MEMBER</h2></div>
+        </div>
+        <div id="game-over" class="ui-overlay" style="display:none; background: rgba(255,255,255,0.4); backdrop-filter: blur(10px);">
+            <div id="game-over-card">
+                <h2 style="color: #a65d5d;">GAME OVER</h2>
+                <p id="final-score" style="font-size: 24px; margin: 20px 0;">Score: 0</p>
+                <button class="btn" onclick="backToSelection()">RETRY</button>
+            </div>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('game-container');
+    const alertBox = document.getElementById('phase-alert');
+    const CW = 1080, CH = 1920;
+    canvas.width = CW; canvas.height = CH;
+    const GROUND_Y = 1620;
+    const STROKE_COLOR = "#ffc1d5";
+    const DEBUG_HITBOXES = false;
+    
+    const sfx = { jump: new Audio('Jump.mp3'), hit: new Audio('Hit.wav') };
+    let audioUnlocked = false;
+
+    let playerYT;
+    function onYouTubeIframeAPIReady() {
+        playerYT = new YT.Player('youtube-player', {
+            height: '0', width: '0',
+            videoId: '1441_l-c0-8',
+            playerVars: { 'autoplay': 0, 'loop': 1, 'playlist': '1441_l-c0-8' }
+        });
+    }
+
+    const sources = {
+        bg: 'bg.png', land: 'land.png', grass: 'grass.png', motto: 'itzy-motto.png',
+        s1: 'stone-1.png', s2: 'stone-2.png', s3: 'stone-3.png',
+        f1: 'firecracker.png', f2: 'firecracker2.png',
+        moon: 'moon.png', star1: 'star.png', star2: 'star-1.png',
+        lia1: 'Lia1.png', lia2: 'Lia2.png', lia3: 'Lia3.png', lia4: 'Lia4.png',
+        R1: 'R1.png', R2: 'R2.png', R3: 'R3.png',
+        ch1: 'ch1.png', ch2: 'ch2.png', ch3: 'ch3.png', ch4: 'ch4.png',
+        Y1: 'Y1.png', Y2: 'Y2.png', Y3: 'Y3.png', Y4: 'Y4.png',
+        YN1: 'YN1.png', YN2: 'YN2.png', YN3: 'YN3.png', YN4: 'YN4.png'
+    };
+
+    const charList = [
+        { id: 'R', frames: 3 }, { id: 'ch', frames: 4 }, { id: 'Y', frames: 4 },
+        { id: 'lia', frames: 4 }, { id: 'YN', frames: 4 }
+    ];
+
+    const img = {};
+    let assetsLoaded = 0;
+    let isSelecting = true, active = false, dead = false;
+    let score = 0, bestScore = Number(localStorage.getItem("liaRunnerBest") || 0);
+    let speed = 15, frame = 0, scrollX = 0, shake = 0;
+    let currentPhase = 1, airTime = 0, distanceSinceLastSpawn = 0, nextObstacleDistance = 800;
+    let selectedChar = null, clickableAreas = [], stars = [], obstacles = [], particles = [];
+    const SKY_DAY = "#d5efea", SKY_DUSK_TOP = "#f4a6a6", SKY_DUSK_BOTTOM = "#8d7ab8", SKY_NIGHT = "#10192f";
+
+    function imageReady(imageObj) {
+        return imageObj && imageObj.complete && imageObj.naturalWidth > 0 && imageObj.naturalHeight > 0;
+    }
+
+    function safeDrawImage(imageObj, x, y, w, h) {
+        if (!imageReady(imageObj)) return false;
+        ctx.drawImage(imageObj, x, y, w, h);
+        return true;
+    }
+
+
+    function drawMotto(duskFactor, nightFactor) {
+        if (!imageReady(img.motto)) return;
+
+        const mottoW = CW * 0.76;
+        const mottoH = mottoW * (img.motto.naturalHeight / img.motto.naturalWidth);
+        const mottoX = (CW - mottoW) / 2;
+        const mottoY = CH * 0.105;
+
+        ctx.save();
+
+        // Day: subtle printed-on-sky watermark.
+        // Dusk/Midnight: gradually becomes a glowing sign.
+        const glowFactor = Math.max(duskFactor, nightFactor);
+        ctx.globalAlpha = 0.13 + glowFactor * 0.35;
+        ctx.shadowColor = nightFactor > 0.35 ? "#ffffff" : "#ffd1dc";
+        ctx.shadowBlur = glowFactor * 42;
+
+        if (currentPhase === 1) {
+            ctx.globalCompositeOperation = "multiply";
+        } else {
+            ctx.globalCompositeOperation = "screen";
+        }
+
+        ctx.drawImage(img.motto, mottoX, mottoY, mottoW, mottoH);
+        ctx.restore();
+    }
+
+
+    for (let key in sources) {
+        img[key] = new Image();
+        img[key].onload = () => assetsLoaded++;
+        img[key].onerror = () => { assetsLoaded++; console.warn("Asset skipped:", sources[key]); };
+        img[key].src = sources[key];
+    }
+
+    canvas.addEventListener('mousedown', (e) => handleClick(e));
+    canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleClick(e.touches[0]); }, {passive: false});
+    window.addEventListener('keydown', (e) => { if(e.code === 'Space' && active && !dead) jump(); });
+
+    function handleClick(e) {
+        if (!audioUnlocked) {
+            Object.values(sfx).forEach(sound => {
+                sound.volume = 0.6;
+                sound.play()
+                    .then(() => { sound.pause(); sound.currentTime = 0; })
+                    .catch(() => {});
+            });
+            audioUnlocked = true;
+        }
+
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = (e.clientX - rect.left) * (CW / rect.width);
+        const mouseY = (e.clientY - rect.top) * (CH / rect.height);
+
+        if (isSelecting) {
+            clickableAreas.forEach(area => {
+                if (mouseX >= area.x1 && mouseX <= area.x2 && mouseY >= area.y1 && mouseY <= area.y2) {
+                    selectedChar = area.char;
+                    startRun();
+                }
+            });
+        } else if (active && !dead) jump();
+    }
+
+    function spawnDust(x, y, count = 1) {
+        for(let i=0; i<count; i++) {
+            particles.push({ x: x, y: y, vx: -Math.random() * 5 - 2, vy: -Math.random() * 4, alpha: 1, size: Math.random() * 18 + 6 });
+        }
+    }
+
+    function jump() {
+        if (player.jumps < player.maxJ) {
+            sfx.jump.currentTime = 0; sfx.jump.play().catch(()=>{});
+            player.dy = player.jumps === 0 ? player.jump : player.jump * 0.75;
+            player.jumps++; 
+            player.scaleY = 1.2;
+            spawnDust(player.x + 100, GROUND_Y, 8);
+        }
+    }
+
+    function startRun() {
+        isSelecting = false; active = true; dead = false;
+        document.getElementById('selection-screen').style.display = 'none';
+        player.y = GROUND_Y - player.h + 20;
+        player.dy = 0;
+        player.jumps = 0;
+        player.scaleY = 1;
+        player.tilt = 0;
+        airTime = 0;
+        if(playerYT && playerYT.playVideo) playerYT.playVideo();
+        
+        stars = [];
+        for(let i=0; i<34; i++) {
+            stars.push({ x: Math.random()*CW, y: Math.random()*CH*0.42, s: Math.random()*26+12, type: Math.random() > 0.5 ? 'star1' : 'star2', offset: Math.random() * 10 });
+        }
+    }
+
+    function backToSelection() {
+        document.getElementById('game-over').style.display = 'none';
+        document.getElementById('selection-screen').style.display = 'flex';
+        container.style.backgroundColor = SKY_DAY;
+        shake = 0; isSelecting = true; active = false; dead = false;
+        speed = 15; 
+        score = 0; 
+        obstacles = []; 
+        particles = []; 
+        stars = [];
+        currentPhase = 1; 
+        distanceSinceLastSpawn = 0; 
+        nextObstacleDistance = 800;
+        frame = 0;
+        player.dy = 0;
+        player.jumps = 0;
+        player.scaleY = 1;
+        player.tilt = 0;
+        airTime = 0;
+        if(playerYT && playerYT.stopVideo) playerYT.stopVideo();
+    }
+
+    const player = { x: 200, y: 0, h: 520, dy: 0, jump: -52, grav: 3.5, jumps: 0, maxJ: 2, anim: 0, tilt: 0, scaleY: 1 };
+
+    function triggerPhase(num, color, message) {
+        currentPhase = num;
+        alertBox.innerText = message; alertBox.style.color = color; alertBox.classList.add('show');
+        setTimeout(() => alertBox.classList.remove('show'), 2000);
+    }
+
+    function update() {
+        scrollX -= (active ? speed : 6);
+        if (scrollX <= -CW) scrollX = 0;
+        if (isSelecting) { if (frame % 8 === 0) player.anim++; frame++; return; }
+        if (dead) return;
+
+        if (score > 600 && currentPhase === 1) triggerPhase(2, "#d97878", "");
+        if (score > 1200 && currentPhase === 2) triggerPhase(3, "#ffffff", "");
+
+        player.dy += player.grav; player.y += player.dy;
+        player.scaleY += (1 - player.scaleY) * 0.15; player.tilt = player.dy * 0.005;
+
+        const floor = GROUND_Y - player.h + 20;
+        if (player.y > floor) {
+            if (player.dy > 10) { 
+                player.scaleY = 0.8; 
+                shake = 12; 
+                spawnDust(player.x + 100, GROUND_Y, 12); 
+            }
+            player.y = floor; 
+            player.dy = 0; 
+            player.jumps = 0; 
+            airTime = 0;
+
+            // Running dust trail
+            if(frame % 5 === 0 && speed > 8) {
+                spawnDust(player.x + 40, GROUND_Y + 10, 2);
+            }
+        } else airTime++;
+
+        if (!selectedChar) return;
+        const charData = charList.find(c => c.id === selectedChar.id) || charList[0];
+        if (frame % 7 === 0) player.anim++;
+
+        distanceSinceLastSpawn += speed;
+        if (distanceSinceLastSpawn > nextObstacleDistance) {
+            const isFire = (currentPhase >= 2) && (Math.random() > 0.6);
+            obstacles.push({ 
+                x: CW, 
+                y: isFire ? GROUND_Y - (190 + Math.random() * 170) : GROUND_Y - 80, 
+                w: isFire ? (150 + Math.random() * 25) : 160, 
+                h: isFire ? (120 + Math.random() * 20) : 130, 
+                key: isFire ? (Math.random() > 0.5 ? 'f1' : 'f2') : 's' + (Math.floor(Math.random()*3)+1), 
+                isFire: isFire, 
+                wiggle: 0,
+                emberTick: Math.random() * 100
+            });
+            distanceSinceLastSpawn = 0;
+            nextObstacleDistance = 760 + Math.random() * 1050 + (speed * 4) + (isFire ? 260 : 0);
+        }
+        
+        obstacles.forEach((o, i) => {
+            o.x -= speed;
+            if(o.isFire) {
+                o.wiggle = Math.sin(frame * 0.12 + o.emberTick) * 18;
+                o.emberTick += 0.05;
+            }
+            const curImg = img[selectedChar.id + (player.anim % charData.frames + 1)];
+            if (imageReady(curImg)) {
+                const pW = player.h * ((curImg.naturalWidth || curImg.width) / (curImg.naturalHeight || curImg.height));
+                const hitPadX = o.isFire ? 8 : 10;
+                const hitPadTop = o.isFire ? 8 : 0;
+                const hitPadBottom = o.isFire ? 8 : 0;
+
+                // Firecracker hitbox is close to the visible sprite,
+                // with a tiny mercy margin so brushes do not feel cheap.
+                const obstacleLeft = o.x + hitPadX;
+                const obstacleRight = o.x + o.w - hitPadX;
+                const obstacleTop = (o.y + o.wiggle) + hitPadTop;
+                const obstacleBottom = (o.y + o.wiggle) + o.h - hitPadBottom;
+
+                const playerPadLeft = 110;
+                const playerPadRight = 110;
+
+                // Stones should mostly hit the lower body/feet.
+                // Firecrackers are airborne, so they must check more of the runner's body.
+                const playerTop = o.isFire ? player.y + 105 : player.y + 370;
+                const playerBottom = o.isFire ? player.y + player.h - 35 : player.y + player.h;
+
+                if (
+                    player.x + playerPadLeft < obstacleRight &&
+                    player.x + pW - playerPadRight > obstacleLeft &&
+                    playerTop < obstacleBottom &&
+                    playerBottom > obstacleTop
+                ) gameOver();
+            }
+            if (o.x + o.w < -200) obstacles.splice(i, 1);
+        });
+
+        particles = particles.filter(p => {
+            p.x += p.vx;
+            p.y += p.vy;
+            p.alpha -= 0.02;
+            p.size *= 0.985;
+            return p.alpha > 0;
+        });
+        if (particles.length > 180) particles.splice(0, particles.length - 180);
+        if(shake > 0) shake *= 0.9;
+        score += speed / 50; speed += 0.005; frame++;
+    }
+
+    function drawChar(imgObj, x, y, w, h, isMenu = false) {
+        if (!imageReady(imgObj)) return;
+        ctx.save();
+        ctx.translate(x + w/2, y + h);
+        if(!isMenu) { ctx.rotate(player.tilt); ctx.scale(1, player.scaleY); }
+        ctx.shadowColor = STROKE_COLOR; ctx.shadowBlur = 12; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+        ctx.drawImage(imgObj, -w/2, -h, w, h);
+        ctx.drawImage(imgObj, -w/2, -h, w, h);
+        ctx.restore();
+    }
+
+    function draw() {
+        ctx.save();
+        if(!isSelecting && shake > 1) ctx.translate(Math.random()*shake, Math.random()*shake);
+        ctx.clearRect(0, 0, CW, CH);
+        
+       // Visual sky transitions
+const duskFactor = Math.min(1, Math.max(0, (score - 600) / 400));
+const nightFactor = Math.min(1, Math.max(0, (score - 1200) / 600));
+
+        // Day base
+        ctx.fillStyle = SKY_DAY; 
+        ctx.fillRect(0,0,CW,CH);
+
+        // Dusk gradient overlay
+        const duskGradient = ctx.createLinearGradient(0, 0, 0, CH);
+        duskGradient.addColorStop(0, SKY_DUSK_TOP);
+        duskGradient.addColorStop(0.48, "#d98cad");
+        duskGradient.addColorStop(1, SKY_DUSK_BOTTOM);
+        ctx.globalAlpha = duskFactor * (1 - nightFactor * 0.35);
+        ctx.fillStyle = duskGradient;
+        ctx.fillRect(0,0,CW,CH);
+
+        // Midnight overlay
+        const nightGradient = ctx.createLinearGradient(0, 0, 0, CH);
+        nightGradient.addColorStop(0, "#070b1d");
+        nightGradient.addColorStop(0.55, SKY_NIGHT);
+        nightGradient.addColorStop(1, "#223149");
+        ctx.globalAlpha = nightFactor;
+        ctx.fillStyle = nightGradient;
+        ctx.fillRect(0,0,CW,CH);
+
+        // Horizon glow during dusk
+        if (duskFactor > 0 && nightFactor < 0.85) {
+            const horizonGlow = ctx.createRadialGradient(CW * 0.12, GROUND_Y - 150, 40, CW * 0.12, GROUND_Y - 150, 760);
+            horizonGlow.addColorStop(0, "rgba(255, 207, 117, 0.55)");
+            horizonGlow.addColorStop(0.4, "rgba(255, 132, 117, 0.25)");
+            horizonGlow.addColorStop(1, "rgba(255, 132, 117, 0)");
+            ctx.globalAlpha = duskFactor * (1 - nightFactor);
+            ctx.fillStyle = horizonGlow;
+            ctx.fillRect(0,0,CW,CH);
+        }
+
+        ctx.globalAlpha = 1;
+
+        // --- NEW: Always draw Background PNG ---
+        if(imageReady(img.bg)) {
+            ctx.save();
+            ctx.globalAlpha = currentPhase >= 3 ? 0.35 : (currentPhase >= 2 ? 0.5 : 0.65);
+            let bgFactor = active ? (0.2 + (currentPhase * 0.05)) : 0.2;
+            ctx.drawImage(img.bg, (scrollX * bgFactor) % CW, 0, CW, CH);
+            ctx.drawImage(img.bg, ((scrollX * bgFactor) % CW) + CW, 0, CW, CH);
+
+            // Tint the background scenery by phase so dusk/midnight are not subtle.
+            if (currentPhase >= 2) {
+                ctx.globalCompositeOperation = "multiply";
+                ctx.globalAlpha = currentPhase >= 3 ? 0.45 : 0.22;
+                ctx.fillStyle = currentPhase >= 3 ? "#18213f" : "#d8879d";
+                ctx.fillRect(0, 0, CW, CH);
+                ctx.globalCompositeOperation = "source-over";
+            }
+            ctx.restore();
+        }
+
+        drawMotto(duskFactor, nightFactor);
+
+        if (currentPhase >= 2) {
+            stars.forEach(s => { 
+                ctx.save(); 
+                ctx.globalAlpha = Math.max(0.15, 0.45 + (Math.sin(frame * 0.05 + s.offset) * 0.25));
+                if(imageReady(img[s.type])) { 
+                    ctx.drawImage(img[s.type], s.x, s.y, s.s, s.s); 
+                } else {
+                    // Fallback twinkle, used when star images are missing or still loading.
+                    ctx.fillStyle = "#ffffff";
+                    ctx.beginPath();
+                    ctx.arc(s.x + s.s/2, s.y + s.s/2, Math.max(2, s.s * 0.13), 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.restore(); 
+            });
+
+            ctx.save(); 
+            ctx.globalAlpha = nightFactor;
+            ctx.shadowColor = "#fff6c9";
+            ctx.shadowBlur = 35 + nightFactor * 45;
+            if(imageReady(img.moon)) { 
+                ctx.drawImage(img.moon, CW - 320, 100, 240, 240); 
+            } else {
+                // Fallback moon, so the dusk transition never depends on an external image.
+                ctx.fillStyle = "#f7f0c8";
+                ctx.beginPath();
+                ctx.arc(CW - 200, 220, 95, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+
+        particles.forEach(p => { ctx.fillStyle = `rgba(180, 180, 180, ${p.alpha})`; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill(); });
+
+        if (isSelecting) {
+            clickableAreas = [];
+            const spacing = CW / (charList.length + 1);
+            charList.forEach((char, i) => {
+                const curImg = img[char.id + (player.anim % char.frames + 1)];
+                if(imageReady(curImg)) {
+                    const h = 400, w = h * ((curImg.naturalWidth || curImg.width) / (curImg.naturalHeight || curImg.height));
+                    const x = spacing * (i + 1) - w/2, y = GROUND_Y - h + 20;
+                    drawChar(curImg, x, y, w, h, true);
+                    clickableAreas.push({ x1: x, y1: y, x2: x + w, y2: y + h, char: char });
+                }
+            });
+        } else {
+            obstacles.forEach(o => { 
+                if(imageReady(img[o.key])) {
+                    ctx.save();
+                    if(o.isFire) {
+                        ctx.translate(o.x, o.y + o.wiggle);
+                        // Ember particles
+                        for(let s = 0; s < 4; s++) {
+                            ctx.fillStyle = Math.random() > 0.5 ? "#ffae00" : "#ff5a00";
+                            ctx.beginPath();
+                            ctx.arc(
+                                o.w + 10 + Math.random()*30,
+                                o.h/2 + (Math.random()*30-15),
+                                Math.random()*10 + 2,
+                                0,
+                                Math.PI*2
+                            );
+                            ctx.fill();
+                        }
+
+                        // Glow
+                        ctx.shadowColor = "#ff7b00";
+                        ctx.shadowBlur = 25;
+
+                        ctx.drawImage(img[o.key], 0, 0, o.w, o.h);
+
+                        if (DEBUG_HITBOXES) {
+                            ctx.save();
+                            ctx.shadowBlur = 0;
+                            ctx.strokeStyle = "rgba(255,0,0,0.8)";
+                            ctx.lineWidth = 4;
+                            ctx.strokeRect(8, 8, o.w - 16, o.h - 16);
+                            ctx.restore();
+                        }
+
+                    } else {
+                        ctx.translate(o.x, o.y);
+                        ctx.drawImage(img[o.key], 0, 0, o.w, o.h);
+                    }
+                    ctx.restore();
+                }
+            });
+            if (!selectedChar) return;
+            const curData = charList.find(c => c.id === selectedChar.id) || charList[0];
+            const curImg = img[selectedChar.id + (player.anim % curData.frames + 1)];
+            if (imageReady(curImg)) {
+                const w = player.h * ((curImg.naturalWidth || curImg.width) / (curImg.naturalHeight || curImg.height));
+                drawChar(curImg, player.x, player.y, w, player.h);
+
+                if (DEBUG_HITBOXES) {
+                    ctx.save();
+                    ctx.shadowBlur = 0;
+                    ctx.strokeStyle = "rgba(0,120,255,0.8)";
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(player.x + 110, player.y + 105, w - 220, player.h - 140);
+                    ctx.restore();
+                }
+            }
+        }
+        if(imageReady(img.land)) { ctx.drawImage(img.land, scrollX, GROUND_Y, CW, 320); ctx.drawImage(img.land, scrollX + CW, GROUND_Y, CW, 320); }
+        if(imageReady(img.grass)) { ctx.drawImage(img.grass, scrollX, GROUND_Y - 40, CW, 200); ctx.drawImage(img.grass, scrollX + CW, GROUND_Y - 40, CW, 200); }
+        ctx.restore();
+        if(active) {
+            ctx.fillStyle = (currentPhase >= 3) ? "#fff" : "#3c5241"; ctx.font = "bold 52px Quicksand";
+            ctx.textAlign = "left"; ctx.fillText(String(Math.floor(score)).padStart(5, '0'), 54, 92);
+            ctx.textAlign = "right"; ctx.fillText("BEST " + String(Math.floor(bestScore)).padStart(5, '0'), CW - 54, 92);
+        }
+    }
+
+    function gameOver() {
+        dead = true; shake = 30; sfx.hit.play().catch(()=>{});
+        if(playerYT && playerYT.pauseVideo) playerYT.pauseVideo();
+        document.getElementById('final-score').innerText = "Score: " + Math.floor(score);
+        document.getElementById('game-over').style.display = 'flex';
+        if(score > bestScore) { bestScore = score; localStorage.setItem("liaRunnerBest", Math.floor(bestScore)); }
+    }
+
+    function render() { 
+        try {
+            update(); 
+            draw(); 
+        } catch (err) {
+            console.error("Render recovered:", err);
+        }
+        requestAnimationFrame(render); 
+    }
+    render();
+    </script>
+</body>
+</html>
